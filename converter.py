@@ -142,7 +142,9 @@ class WaymoToKITTI(object):
         return new_filename
         #print (file_idx, chunk_index, new_idx, old_filename, "->", new_filename)
 
-
+    def get_cam_index(self, label_index):
+        label_remap = [2, 0, 1, 3, 4]
+        return label_remap[label_index]
 
     def save_image(self, frame, file_idx, frame_idx):
         """ parse and save the images in png format
@@ -154,7 +156,7 @@ class WaymoToKITTI(object):
         for img in frame.images:
             if (img.name-1) in self.converting_cams:
                 filename = self.get_filename(file_idx, frame_idx)
-                img_path = self.image_save_dir + str(img.name - 1) + '/' + self.prefix + filename + '.png'
+                img_path = self.image_save_dir + str(self.get_cam_index(img.name - 1)) + '/' + self.prefix + filename + '.png'
                 img = cv2.imdecode(np.frombuffer(img.image, np.uint8), cv2.IMREAD_COLOR)
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 plt.imsave(img_path, rgb_img, format='png')
@@ -258,7 +260,8 @@ class WaymoToKITTI(object):
         # print('Tr_velo_to_cam\n',Tr_velo_to_cam)
         calib_context += "Tr_velo_to_cam" + ": " + " ".join(['{}'.format(i) for i in Tr_velo_to_cam[:3, :].reshape(12)]) + '\n'
 
-        with open(self.calib_save_dir + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.txt', 'w+') as fp_calib:
+        filename = self.get_filename(file_idx, frame_idx)
+        with open(self.calib_save_dir + '/' + self.prefix + filename + '.txt', 'w+') as fp_calib:
             fp_calib.write(calib_context)
 
     def save_lidar(self, frame, file_idx, frame_idx):
@@ -341,7 +344,7 @@ class WaymoToKITTI(object):
 
             if cam_id in self.converting_cams:
                 filename = self.get_filename(file_idx, frame_idx)
-                filedir = self.label_save_dir + str(cam_id)
+                filedir = self.label_save_dir + str(self.get_cam_index(cam_id))
                 if not os.path.exists(filedir):
                     os.makedirs(filedir)
 
@@ -614,8 +617,9 @@ class WaymoToKITTI(object):
 
         for d in [self.label_save_dir, self.image_save_dir]:
             for i in self.converting_cams:
-                if not isdir(d + str(i)):
-                    os.makedirs(d + str(i))
+                dir_name = d + str(self.get_cam_index(i))
+                if not isdir(dir_name):
+                    os.makedirs(dir_name)
 
     def convert_range_image_to_point_cloud(self,
                                            frame,
