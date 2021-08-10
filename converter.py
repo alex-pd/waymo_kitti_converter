@@ -57,11 +57,12 @@ save_track_id = True
 
 class WaymoToKITTI(object):
 
-    def __init__(self, load_dir, save_dir, prefix, num_proc, converting_cams=[0]):
+    def __init__(self, chunk_index, load_dir, save_dir, prefix, num_proc, converting_cams=[0]):
         # turn on eager execution for older tensorflow versions
         if int(tf.__version__.split('.')[0]) < 2:
             tf.enable_eager_execution()
 
+        self.chunk_index = chunk_index
         self.lidar_list = ['_FRONT', '_FRONT_RIGHT', '_FRONT_LEFT', '_SIDE_RIGHT', '_SIDE_LEFT']
         self.type_list = ['UNKNOWN', 'VEHICLE', 'PEDESTRIAN', 'SIGN', 'CYCLIST']
         self.waymo_to_kitti_class_map = {
@@ -130,7 +131,8 @@ class WaymoToKITTI(object):
         import math
 
         chunk_size = 25000
-        chunk_index = math.floor(file_idx / 25)
+        #chunk_index = math.floor(file_idx / 25)
+        chunk_index = self.chunk_index
         new_idx = file_idx % 25
 
         old_filename = str(new_idx).zfill(3) + str(frame_idx).zfill(3)
@@ -756,6 +758,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     """
 
-    converter = WaymoToKITTI("/home/ubuntu/datasets/waymo_one", "/home/ubuntu/datasets/kitti_one", "", 1)
+    converter = WaymoToKITTI(5, "/home/ubuntu/datasets/waymo_one", "/home/ubuntu/datasets/kitti_one", "", 1)
     #converter = WaymoToKITTI(args.load_dir, args.save_dir, args.prefix, args.num_proc)
     converter.convert()
