@@ -38,7 +38,7 @@ selected_waymo_classes = [
     # 'UNKNOWN',
     'VEHICLE',
     'PEDESTRIAN',
-    # 'SIGN',
+    #'SIGN',
     'CYCLIST'
 ]
 
@@ -57,7 +57,7 @@ save_track_id = True
 
 class WaymoToKITTI(object):
 
-    def __init__(self, load_dir, save_dir, prefix, num_proc):
+    def __init__(self, load_dir, save_dir, prefix, num_proc, converting_cams=[0]):
         # turn on eager execution for older tensorflow versions
         if int(tf.__version__.split('.')[0]) < 2:
             tf.enable_eager_execution()
@@ -72,6 +72,7 @@ class WaymoToKITTI(object):
             'SIGN': 'Sign'  # not in kitti
         }
 
+        self.converting_cams = converting_cams
         self.load_dir = load_dir
         self.save_dir = save_dir
         self.prefix   = prefix
@@ -83,7 +84,7 @@ class WaymoToKITTI(object):
         self.label_all_save_dir   = self.save_dir + '/label_all'
         self.image_save_dir       = self.save_dir + '/image_'
         self.calib_save_dir       = self.save_dir + '/calib'
-        #self.point_cloud_save_dir = self.save_dir + '/velodyne'
+        self.point_cloud_save_dir = self.save_dir + '/velodyne'
         self.pose_save_dir        = self.save_dir + '/pose'
 
         self.create_folder()
@@ -99,7 +100,6 @@ class WaymoToKITTI(object):
         dataset = tf.data.TFRecordDataset(pathname, compression_type='')
         
         for frame_idx, data in enumerate(dataset):
-            #print ("FRAME:" , frame_idx)
             frame = open_dataset.Frame()
             frame.ParseFromString(bytearray(data.numpy()))
             if selected_waymo_locations is not None and frame.context.stats.location not in selected_waymo_locations:
@@ -115,14 +115,32 @@ class WaymoToKITTI(object):
             #self.save_lidar(frame, file_idx, frame_idx)
             
             # parse label files
-            self.save_label(frame, file_idx, frame_idx)
-            
+            #self.save_label(frame, file_idx, frame_idx)
+            self.save_2dlabel(frame, file_idx, frame_idx)
+
             # parse pose files
-            self.save_pose(frame, file_idx, frame_idx)
+            #self.save_pose(frame, file_idx, frame_idx)
             
 
     def __len__(self):
         return len(self.tfrecord_pathnames)
+
+
+    def get_filename(self, file_idx, frame_idx):
+        import math
+
+        chunk_size = 25000
+        chunk_index = math.floor(file_idx / 25)
+        new_idx = file_idx % 25
+
+        old_filename = str(new_idx).zfill(3) + str(frame_idx).zfill(3)
+        old_filename_int = int(old_filename)
+        new_filename_int = chunk_index*chunk_size + old_filename_int
+        new_filename = str(new_filename_int).zfill(6)
+        return new_filename
+        #print (file_idx, chunk_index, new_idx, old_filename, "->", new_filename)
+
+
 
     def save_image(self, frame, file_idx, frame_idx):
         """ parse and save the images in png format
@@ -132,12 +150,12 @@ class WaymoToKITTI(object):
                 :return:
         """
         for img in frame.images:
-            img_path = self.image_save_dir + str(img.name - 1) + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.png'
-            img = cv2.imdecode(np.frombuffer(img.image, np.uint8), cv2.IMREAD_COLOR)
-            rgb_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            #print ("save_image B")
-            plt.imsave(img_path, rgb_img, format='png')
-            #print ("save_image C")
+            if (img.name-1) in self.converting_cams:
+                filename = self.get_filename(file_idx, frame_idx)
+                img_path = self.image_save_dir + str(img.name - 1) + '/' + self.prefix + filename + '.png'
+                img = cv2.imdecode(np.frombuffer(img.image, np.uint8), cv2.IMREAD_COLOR)
+                rgb_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                plt.imsave(img_path, rgb_img, format='png')
 
     def save_calib(self, frame, file_idx, frame_idx):
         """ parse and save the calibration data
@@ -303,6 +321,70 @@ class WaymoToKITTI(object):
         pc_path = self.point_cloud_save_dir + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.bin'
         point_cloud.astype(np.float32).tofile(pc_path)  # note: must save as float32, otherwise loading errors
 
+
+    def save_2dlabel(self, frame, file_idx, frame_idx):
+        """ parse and save the label data in .txt format
+                :param frame: open dataset frame proto
+                :param file_idx: the current file number
+                :param frame_idx: the current frame number
+                :return:
+                """
+
+
+        # preprocess bounding box data
+        for camera_labels in frame.camera_labels:
+            name = camera_labels.name
+
+            cam_id = name - 1
+
+            if cam_id in self.converting_cams:
+                filename = self.get_filename(file_idx, frame_idx)
+                filedir = self.label_save_dir + str(cam_id)
+                if not os.path.exists(filedir):
+                    os.makedirs(filedir)
+
+                filepath = filedir + '/' + self.prefix + filename + '.txt'
+
+                with open(filepath, 'w') as f:
+                    for label in camera_labels.labels:
+                        my_type = self.type_list[label.type]
+                        if my_type not in selected_waymo_classes:
+                            continue
+
+                        my_type = self.waymo_to_kitti_class_map[my_type]
+
+                        # waymo: bounding box origin is at the center
+                        # TODO: need a workaround as bbox may not belong to front cam
+                        xmin = label.box.center_x - 0.5 * label.box.length
+                        ymin = label.box.center_y - 0.5 * label.box.width
+                        xmax = label.box.center_x + 0.5 * label.box.length
+                        ymax = label.box.center_y + 0.5 * label.box.width
+                        bounding_box = [xmin, ymin, xmax, ymax]
+
+                        truncation = 0
+                        occlusion = 0
+                        alpha = -10
+                        x,y,z = 0,0,0
+                        h,w,l = 0,0,0
+                        rot_y = 0
+                        line = my_type + ' {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n'.format(truncation,
+                                                                                            occlusion,
+                                                                                            alpha,
+                                                                                            round(bounding_box[0], 2),
+                                                                                            round(bounding_box[1], 2),
+                                                                                            round(bounding_box[2], 2),
+                                                                                            round(bounding_box[3], 2),
+                                                                                            h,
+                                                                                            w,
+                                                                                            l,
+                                                                                            x,
+                                                                                            y,
+                                                                                            z,
+                                                                                            rot_y)
+                        f.write(line)
+
+
+
     def save_label(self, frame, file_idx, frame_idx):
         """ parse and save the label data in .txt format
                 :param frame: open dataset frame proto
@@ -310,27 +392,77 @@ class WaymoToKITTI(object):
                 :param frame_idx: the current frame number
                 :return:
                 """
+
+        #filename = self.get_filename(file_idx, frame_idx)
+        #print (filename)
+        #if (filename == "000000"):
+        #    print ("WOOO HHOOO!!!!!")
+
         fp_label_all = open(self.label_all_save_dir + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.txt', 'w+')
+        #fp_label_all = open(self.label_all_save_dir + '/' + self.prefix + filename + '.txt', 'w+')
         # preprocess bounding box data
         id_to_bbox = dict()
         id_to_name = dict()
-        for labels in frame.projected_lidar_labels:
+
+        #for labels in frame.projected_lidar_labels:
+        for labels in frame.camera_labels:
+            
+            print ("label name: ", labels.name)
             name = labels.name
             for label in labels.labels:
                 # waymo: bounding box origin is at the center
                 # TODO: need a workaround as bbox may not belong to front cam
+                xmin = label.box.center_x - 0.5 * label.box.length
+                ymin = label.box.center_y - 0.5 * label.box.width
+                xmax = label.box.center_x + 0.5 * label.box.length
+                ymax = label.box.center_y + 0.5 * label.box.width
+                print ("----------------------------------------")
+                print (xmin, ymin, xmax, ymax)
+                print ("=======================================")
+                """
                 bbox = [label.box.center_x - label.box.length / 2, label.box.center_y - label.box.width / 2,
                         label.box.center_x + label.box.length / 2, label.box.center_y + label.box.width / 2]
-                id_to_bbox[label.id] = bbox
+                """
+                bounding_box = [xmin, ymin, xmax, ymax]
+                id_to_bbox[label.id] = bounding_box
                 id_to_name[label.id] = name - 1
+                my_type = "Car"
+                line = my_type + ' {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n'.format(0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    round(bounding_box[0], 2),
+                                                                                    round(bounding_box[1], 2),
+                                                                                    round(bounding_box[2], 2),
+                                                                                    round(bounding_box[3], 2),
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0)
+                line_all = line[:-1] + ' ' + str(name-1) + '\n'
 
-        # print([i.type for i in frame.laser_labels])
+                # store the label
+                fp_label = open(self.label_save_dir + str(name-1) + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.txt', 'a')
+                #fp_label = open(self.label_save_dir + name + '/' + self.prefix + filename + '.txt', 'a')
+                fp_label.write(line)
+                fp_label.close()
+
+
+        print (id_to_bbox)
+
+
+
+
+        
         for obj in frame.laser_labels:
 
             # calculate bounding box
             bounding_box = None
             name = None
             id = obj.id
+            print ("what is my id: ", id)
             for lidar in self.lidar_list:
                 if id + lidar in id_to_bbox:
                     bounding_box = id_to_bbox.get(id + lidar)
@@ -342,13 +474,25 @@ class WaymoToKITTI(object):
                 name = '0'
                 bounding_box = (0, 0, 0, 0)
 
+            #print ("bounding box: ", bounding_box)
+            #bounding_box = (10, 20, 30, 40)
+
             my_type = self.type_list[obj.type]
 
             if my_type not in selected_waymo_classes:
-                continue
+                #if (filename == "000000"):
+                #    print (my_type)
+                #    print (self.type_list[obj.type])
+                #    print (selected_waymo_classes)
+                #    print (self.label_save_dir + name , " quitting 1")
+                assert (False)
+                #continue
 
             if filter_empty_3dboxes and obj.num_lidar_points_in_box < 1:
-                continue
+                #if (filename == "000000"):
+                #    print ("quitting 2")
+                #continue
+                assert (False)
 
             # from waymo_open_dataset.utils.box_utils import compute_num_points_in_box_3d
             # print('annot:', obj.num_lidar_points_in_box)
@@ -436,6 +580,7 @@ class WaymoToKITTI(object):
 
             # store the label
             fp_label = open(self.label_save_dir + name + '/' + self.prefix + str(file_idx).zfill(3) + str(frame_idx).zfill(3) + '.txt', 'a')
+            #fp_label = open(self.label_save_dir + name + '/' + self.prefix + filename + '.txt', 'a')
             fp_label.write(line)
             fp_label.close()
 
@@ -444,6 +589,7 @@ class WaymoToKITTI(object):
         fp_label_all.close()
 
         # print(file_idx, frame_idx)
+        
 
     def save_pose(self, frame, file_idx, frame_idx):
         """ Save self driving car (SDC)'s own pose
@@ -459,11 +605,13 @@ class WaymoToKITTI(object):
 
 
     def create_folder(self):
-        for d in [self.label_all_save_dir, self.calib_save_dir, self.pose_save_dir]:
+        #for d in [self.label_all_save_dir, self.calib_save_dir, self.pose_save_dir, self.point_cloud_save_dir]:
+        for d in [self.calib_save_dir]:
             if not isdir(d):
                 os.makedirs(d)
+
         for d in [self.label_save_dir, self.image_save_dir]:
-            for i in range(5):
+            for i in self.converting_cams:
                 if not isdir(d + str(i)):
                     os.makedirs(d + str(i))
 
@@ -599,12 +747,15 @@ class WaymoToKITTI(object):
 
 
 if __name__ == '__main__':
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('load_dir', help='Directory to load Waymo Open Dataset tfrecords')
     parser.add_argument('save_dir', help='Directory to save converted KITTI-format data')
     parser.add_argument('--prefix', default='', help='Prefix to be added to converted file names')
     parser.add_argument('--num_proc', default=1, help='Number of processes to spawn')
     args = parser.parse_args()
+    """
 
-    converter = WaymoToKITTI(args.load_dir, args.save_dir, args.prefix, args.num_proc)
+    converter = WaymoToKITTI("/home/ubuntu/datasets/waymo_one", "/home/ubuntu/datasets/kitti_one", "", 1)
+    #converter = WaymoToKITTI(args.load_dir, args.save_dir, args.prefix, args.num_proc)
     converter.convert()
