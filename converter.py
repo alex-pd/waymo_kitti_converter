@@ -57,11 +57,12 @@ save_track_id = True
 
 class WaymoToKITTI(object):
 
-    def __init__(self, chunk_index, load_dir, save_dir, prefix, num_proc, converting_cams=[0]):
+    def __init__(self, chunk_index, load_dir, save_dir, prefix, num_proc, save_format="png", converting_cams=[0]):
         # turn on eager execution for older tensorflow versions
         if int(tf.__version__.split('.')[0]) < 2:
             tf.enable_eager_execution()
 
+        self.save_format = save_format
         self.chunk_index = chunk_index
         self.lidar_list = ['_FRONT', '_FRONT_RIGHT', '_FRONT_LEFT', '_SIDE_RIGHT', '_SIDE_LEFT']
         self.type_list = ['UNKNOWN', 'VEHICLE', 'PEDESTRIAN', 'SIGN', 'CYCLIST']
@@ -156,10 +157,10 @@ class WaymoToKITTI(object):
         for img in frame.images:
             if (img.name-1) in self.converting_cams:
                 filename = self.get_filename(file_idx, frame_idx)
-                img_path = self.image_save_dir + str(self.get_cam_index(img.name - 1)) + '/' + self.prefix + filename + '.png'
+                img_path = self.image_save_dir + str(self.get_cam_index(img.name - 1)) + '/' + self.prefix + filename + '.' + self.save_format
                 img = cv2.imdecode(np.frombuffer(img.image, np.uint8), cv2.IMREAD_COLOR)
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                plt.imsave(img_path, rgb_img, format='png')
+                plt.imsave(img_path, rgb_img, format=self.save_format)
 
     def save_calib(self, frame, file_idx, frame_idx):
         """ parse and save the calibration data
@@ -762,6 +763,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     """
 
-    converter = WaymoToKITTI(5, "/home/ubuntu/datasets/waymo_one", "/home/ubuntu/datasets/kitti_one", "", 1)
+    converter = WaymoToKITTI(0, "/home/ubuntu/datasets/waymo_one", "/home/ubuntu/datasets/kitti_jpg", "", 1, save_format="jpg")
     #converter = WaymoToKITTI(args.load_dir, args.save_dir, args.prefix, args.num_proc)
     converter.convert()
